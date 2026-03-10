@@ -336,92 +336,94 @@ async def handle_broadcast(event):
 
 
 HASH_FILE = "/tmp/tg_code_hash.txt"
+CODE_FILE = "/tmp/tg_login_code.txt"
+
+# Second client using bot token to receive the code
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+bot = TelegramClient(StringSession(), API_ID, API_HASH) if not BOT_TOKEN else None
+
+
+async def wait_for_code_via_bot(hash_value: str) -> str:
+    """Use a simple bot to receive the login code from the user."""
+    import httpx
+
+    # Send message to user via Bot API asking for code
+    ask_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    chat_id = PHONE  # won't work directly, need numeric ID
+
+    # Instead use a file-based approach with the bot
+    # Bot sends "send me your code" and polls for reply
+    print("📱 Check Telegram — a login code has been sent to you!")
+    print("🤖 Send that code to your bot (the first bot you made)")
+    print("⏳ Waiting up to 10 minutes for you to forward the code...")
+
+    # Poll for the code file written by bot
+    for i in range(60):  # 10 minutes
+        await asyncio.sleep(10)
+        if os.path.exists(CODE_FILE):
+            with open(CODE_FILE, "r") as f:
+                code = f.read().strip()
+            os.remove(CODE_FILE)
+            return code
+        # Also check env var as fallback
+        code = os.getenv("TELEGRAM_CODE", "").strip()
+        if code:
+            return code
+        print(f"⏳ Waiting for code... ({(i+1)*10}s)")
+    return ""
+
 
 async def main():
     print("Starting userbot...")
     await client.connect()
 
     if not await client.is_user_authorized():
-        code = os.getenv("TELEGRAM_CODE", "").strip()
+        print(f"📱 Requesting login code for {PHONE}...")
+        sent = await client.send_code_request(PHONE)
+        hash_value = sent.phone_code_hash
 
-        # Try to load saved hash from file first
-        saved_hash = None
-        if os.path.exists(HASH_FILE):
-            with open(HASH_FILE, "r") as f:
-                saved_hash = f.read().strip()
-            print(f"✅ Loaded saved hash from file")
+        # Save hash to file
+        with open(HASH_FILE, "w") as f:
+            f.write(hash_value)
 
-        if saved_hash and code:
-            # We have both — try to sign in
-            print("Signing in with saved hash + code...")
-            try:
-                await client.sign_in(PHONE, code, phone_code_hash=saved_hash)
-                print("🎉 Logged in successfully!")
-                os.remove(HASH_FILE)  # Clean up
-            except Exception as e:
-                print(f"❌ Sign in failed: {e}")
-                print("Delete TELEGRAM_CODE variable, redeploy to get a fresh code.")
+        print("✅ Code sent to your Telegram app!")
+        print("=" * 50)
+        print("👉 NOW DO THIS:")
+        print("   1. Check Telegram for the login code")
+        print("   2. Go to Railway → Variables")
+        print("   3. Add:  TELEGRAM_CODE = <the code>")
+        print("   4. IMPORTANT: Do NOT save/deploy — just add the var")
+        print("      Railway will NOT redeploy if you use Raw Editor!")
+        print("=" * 50)
+        print("💡 TIP: Use Raw Editor in Railway Variables to avoid redeploy!")
+        print("⏳ Waiting 10 minutes for code...")
+
+        # Wait up to 10 minutes
+        code = ""
+        for i in range(60):
+            await asyncio.sleep(10)
+            # Re-read env (works if Railway doesn't redeploy)
+            code = os.getenv("TELEGRAM_CODE", "").strip()
+            if code:
+                print(f"✅ Got code after {(i+1)*10}s!")
+                break
+            print(f"⏳ {(i+1)*10}s / 600s — waiting...")
+        
+        if not code:
+            print("❌ Timed out. Redeploy to try again.")
+            return
+
+        print("🔐 Signing in...")
+        try:
+            await client.sign_in(PHONE, code, phone_code_hash=hash_value)
+            print("🎉 Logged in successfully! Bot is running!")
+            if os.path.exists(HASH_FILE):
                 os.remove(HASH_FILE)
-                return
-        elif not saved_hash:
-            # Request fresh code and save hash to file
-            print(f"Requesting login code for {PHONE}...")
-            sent = await client.send_code_request(PHONE)
-            hash_value = sent.phone_code_hash
-
-            # Save hash to file so it survives env var updates
-            with open(HASH_FILE, "w") as f:
-                f.write(hash_value)
-
-            print(f"✅ Code sent to your Telegram!")
-            print(f"📋 Hash saved internally — you only need to add ONE variable:")
-            print(f"   TELEGRAM_CODE = (the 5 digit code from Telegram)")
-            print(f"⏳ Waiting up to 5 minutes...")
-
-            # Wait up to 5 minutes
-            for i in range(30):
-                await asyncio.sleep(10)
-                code = os.getenv("TELEGRAM_CODE", "").strip()
-                if code:
-                    print(f"✅ Got code! Signing in...")
-                    try:
-                        await client.sign_in(PHONE, code, phone_code_hash=hash_value)
-                        print("🎉 Logged in successfully!")
-                        if os.path.exists(HASH_FILE):
-                            os.remove(HASH_FILE)
-                        break
-                    except Exception as e:
-                        print(f"❌ Sign in failed: {e}")
-                        return
-                else:
-                    print(f"⏳ Waiting... ({(i+1)*10}s / 300s) — add TELEGRAM_CODE in Railway!")
-            else:
-                print("❌ Timed out waiting for code.")
-                return
-        else:
-            # Have hash but no code yet — keep waiting
-            print(f"⏳ Hash ready, waiting for TELEGRAM_CODE variable in Railway...")
-            for i in range(30):
-                await asyncio.sleep(10)
-                code = os.getenv("TELEGRAM_CODE", "").strip()
-                if code:
-                    print(f"✅ Got code! Signing in...")
-                    try:
-                        await client.sign_in(PHONE, code, phone_code_hash=saved_hash)
-                        print("🎉 Logged in successfully!")
-                        if os.path.exists(HASH_FILE):
-                            os.remove(HASH_FILE)
-                        break
-                    except Exception as e:
-                        print(f"❌ Code expired or wrong. Delete TELEGRAM_CODE and redeploy.")
-                        if os.path.exists(HASH_FILE):
-                            os.remove(HASH_FILE)
-                        return
-                else:
-                    print(f"⏳ Waiting... ({(i+1)*10}s / 300s)")
-            else:
-                print("❌ Timed out.")
-                return
+        except Exception as e:
+            print(f"❌ Failed: {e}")
+            if os.path.exists(HASH_FILE):
+                os.remove(HASH_FILE)
+            return
 
     print("✅ Userbot running! Type .summarise in any Telegram chat.")
     await client.run_until_disconnected()
