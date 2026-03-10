@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TG Control</title>
+<title>TeleFlow AI</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -368,8 +368,8 @@
     <div class="header-left">
       <div class="logo">⚡</div>
       <div>
-        <div class="header-title">TG Control</div>
-        <div class="header-sub">Userbot Dashboard</div>
+        <div class="header-title">TeleFlow AI</div>
+        <div class="header-sub">Telegram Automation Dashboard</div>
       </div>
     </div>
     <div class="status-badge">
@@ -537,8 +537,33 @@
     <div id="dialogList"><div style="color:var(--muted);font-size:13px;" class="pulse">Loading chats...</div></div>
   </div>
 
-  <!-- Log -->
-  <div class="section-title">System Log</div>
+  <!-- AI Persona Editor -->
+  <div class="section-title">AI Persona</div>
+  <div class="card full">
+    <div class="card-label">Identity & Context</div>
+    <div class="card-title">How AI Replies as You</div>
+    <div class="card-desc">Edit the personality and context the AI uses when replying. Changes apply instantly.</div>
+    <label>Your name (how AI signs messages internally)</label>
+    <input type="text" id="myName" placeholder="Your first name..." />
+    <label>AI persona / instructions</label>
+    <textarea id="personaText" rows="8" style="
+      width:100%; margin-top:8px;
+      background:var(--surface2); border:1px solid var(--border);
+      color:var(--text); border-radius:10px; padding:12px 14px;
+      font-family:'DM Sans',sans-serif; font-size:13px;
+      outline:none; resize:vertical; line-height:1.6;
+      transition:border-color 0.2s;
+    " onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="savePersona()" id="btnPersona">
+        <div class="spinner"></div>
+        <span class="btn-text">💾 Save Persona</span>
+      </button>
+      <button class="btn btn-secondary" onclick="resetPersona()">↺ Reset to Default</button>
+    </div>
+  </div>
+
+
   <div class="card full">
     <div class="card-label">Activity</div>
     <div class="card-title">Recent Log</div>
@@ -608,8 +633,11 @@ async function loadStatus() {
     document.getElementById('autoreplyToggle').checked = data.autoreply;
     if (data.autoreply_message) document.getElementById('autoreplyMsg').placeholder = data.autoreply_message;
 
-    // Groups
-    renderGroups(data.scrape_groups);
+    // Persona
+    if (data.ai_persona) document.getElementById('personaText').value = data.ai_persona;
+    if (data.my_name) document.getElementById('myName').value = data.my_name;
+
+
 
     // Log
     const log = document.getElementById('logBox');
@@ -749,6 +777,38 @@ function summariseChatFromDashboard(name) {
   document.getElementById('singleChatName').value = name;
   document.getElementById('singleChatName').scrollIntoView({ behavior: 'smooth', block: 'center' });
   toast(`Set to summarise: ${name}`, 'info');
+}
+
+// ── Persona ────────────────────────────────────────────────────────
+const DEFAULT_PERSONA = `You are replying on behalf of the user named {my_name} in a Telegram chat.
+
+About the user:
+- Casual and friendly, plain English, he has his website named nikshep.vercel.app
+- Uses short forms naturally: irl, imo, ig, obv, fs, ngl, rn, rly, tbh, lmao, fr
+- Replies are SHORT — 1 to 3 sentences max
+- No emojis unless the other person uses them first
+- Sounds human and natural, never robotic or formal
+- Never starts a reply with "Hey" every single time — vary the opening
+- Never reveals being an AI
+- If asked something personal the user hasn't shared, give a vague natural deflection
+- Reads the FULL conversation history carefully before replying
+- Matches the energy and tone of the conversation`;
+
+async function savePersona() {
+  const persona = document.getElementById('personaText').value.trim();
+  const myName = document.getElementById('myName').value.trim();
+  if (!persona) { toast('Persona cannot be empty', 'error'); return; }
+  setLoading('btnPersona', true);
+  try {
+    await api('/api/persona', 'POST', { persona, my_name: myName });
+    toast('✅ Persona saved!', 'success');
+  } catch(e) { toast('Error saving', 'error'); }
+  setLoading('btnPersona', false);
+}
+
+function resetPersona() {
+  document.getElementById('personaText').value = DEFAULT_PERSONA;
+  toast('Reset to default', 'info');
 }
 
 // ── Init ──────────────────────────────────────────────────────────
