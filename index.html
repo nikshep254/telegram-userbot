@@ -477,7 +477,7 @@
   <div class="card full">
     <div class="card-label">Scrape Links</div>
     <div class="card-title">Extract Links from Groups</div>
-    <div class="card-desc">Filter by type and source group. Results sent to Saved Messages.</div>
+    <div class="card-desc">Filter by type. Paste a t.me link, group name, use saved groups, or scrape all.</div>
     <div class="grid" style="margin-top:14px">
       <div>
         <label>Link type</label>
@@ -497,19 +497,38 @@
         <select id="linkSource">
           <option value="all">All groups</option>
           <option value="saved">Saved groups only</option>
-          <option value="custom">Specific group</option>
+          <option value="custom">Group name or t.me link</option>
         </select>
       </div>
     </div>
     <div id="customGroupRow" style="display:none; margin-top:4px;">
-      <label>Group name</label>
-      <input type="text" id="customGroupName" placeholder="e.g. Movies, Crypto..." />
+      <label>Group name or t.me/username</label>
+      <input type="text" id="customGroupName" placeholder="e.g. Movies, Crypto... or https://t.me/theapexmindset" />
     </div>
     <div class="btn-row">
       <button class="btn btn-primary" onclick="doScrapeLinks()" id="btnLinks">
         <div class="spinner"></div>
         <span class="btn-text">🔗 Scrape Links</span>
       </button>
+    </div>
+  </div>
+
+  <!-- Live Results Panel -->
+  <div class="section-title">Live Results</div>
+  <div class="card full" id="resultsCard">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div>
+        <div class="card-label">Real-time Output</div>
+        <div class="card-title">Results <span id="taskBadge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);margin-left:8px;font-weight:400;color:var(--muted);">idle</span></div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="clearResults()">✕ Clear</button>
+    </div>
+    <div id="resultsBox" style="
+      background:var(--surface2); border:1px solid var(--border);
+      border-radius:12px; padding:14px; min-height:80px; max-height:400px;
+      overflow-y:auto; font-size:13px; line-height:1.7;
+    ">
+      <span style="color:var(--muted);">Results will appear here in real time...</span>
     </div>
   </div>
 
@@ -527,14 +546,54 @@
   </div>
 
   <!-- Chats Dashboard -->
-  <div class="section-title">Dashboard — Recent Chats</div>
+  <div class="section-title">Dashboard</div>
   <div class="card full">
-    <div class="card-label">Live Chats</div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-      <div class="card-title">Your Chats</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <div>
+        <div class="card-label">Personal DMs</div>
+        <div class="card-title">Direct Messages</div>
+        <div class="card-desc">Tap a chat to inject custom context for AI replies.</div>
+      </div>
       <button class="btn btn-secondary btn-sm" onclick="loadDialogs()">↻ Refresh</button>
     </div>
-    <div id="dialogList"><div style="color:var(--muted);font-size:13px;" class="pulse">Loading chats...</div></div>
+    <div id="dmList"><div style="color:var(--muted);font-size:13px;" class="pulse">Loading...</div></div>
+  </div>
+
+  <div class="card full">
+    <div class="card-label">Groups & Channels</div>
+    <div class="card-title">Groups</div>
+    <div class="card-desc">Tap any group to summarise it.</div>
+    <div id="groupList" style="margin-top:12px;"><div style="color:var(--muted);font-size:13px;" class="pulse">Loading...</div></div>
+  </div>
+
+  <!-- Context Modal -->
+  <div id="contextModal" style="
+    display:none; position:fixed; inset:0; z-index:100;
+    background:rgba(0,0,0,0.7); backdrop-filter:blur(4px);
+    align-items:center; justify-content:center;
+  ">
+    <div style="
+      background:var(--surface); border:1px solid var(--border);
+      border-radius:20px; padding:28px; width:90%; max-width:480px;
+      box-shadow:0 24px 60px rgba(0,0,0,0.5);
+    ">
+      <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:6px;">CONTEXT INJECTION</div>
+      <div style="font-size:16px;font-weight:600;margin-bottom:4px;" id="modalName">Chat</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">This context is added to every AI reply for this person specifically.</div>
+      <textarea id="modalContext" rows="6" placeholder="e.g. This is my close friend from college. We talk about tech, memes and life. She's going through a breakup so be empathetic..." style="
+        width:100%; background:var(--surface2); border:1px solid var(--border);
+        color:var(--text); border-radius:10px; padding:12px 14px;
+        font-family:'DM Sans',sans-serif; font-size:13px;
+        outline:none; resize:vertical; line-height:1.6;
+      "></textarea>
+      <div class="btn-row" style="margin-top:16px;">
+        <button class="btn btn-primary" onclick="saveContext()" id="btnSaveCtx">
+          <div class="spinner"></div>
+          <span class="btn-text">💾 Save Context</span>
+        </button>
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <!-- AI Persona Editor -->
@@ -637,7 +696,8 @@ async function loadStatus() {
     if (data.ai_persona) document.getElementById('personaText').value = data.ai_persona;
     if (data.my_name) document.getElementById('myName').value = data.my_name;
 
-
+    // Results
+    renderResults(data.results || [], data.task_status);
 
     // Log
     const log = document.getElementById('logBox');
@@ -647,6 +707,44 @@ async function loadStatus() {
   } catch(e) {
     document.getElementById('statusText').textContent = 'offline';
   }
+}
+
+// ── Results ────────────────────────────────────────────────────────
+function renderResults(results, taskStatus) {
+  const box = document.getElementById('resultsBox');
+  const badge = document.getElementById('taskBadge');
+  if (!box) return;
+
+  // Update badge
+  const badgeColors = { idle: 'var(--muted)', running: 'var(--accent)', done: 'var(--accent3)' };
+  badge.textContent = taskStatus || 'idle';
+  badge.style.color = badgeColors[taskStatus] || 'var(--muted)';
+  badge.style.borderColor = badgeColors[taskStatus] || 'var(--border)';
+  if (taskStatus === 'running') badge.classList.add('pulse');
+  else badge.classList.remove('pulse');
+
+  if (!results || results.length === 0) {
+    box.innerHTML = '<span style="color:var(--muted);">Results will appear here in real time...</span>';
+    return;
+  }
+
+  box.innerHTML = results.map(r => {
+    if (r.type === 'status') return `<div style="color:var(--muted);font-size:12px;">⏳ ${r.content}</div>`;
+    if (r.type === 'result') return `<div style="color:var(--accent3);font-weight:600;margin-top:8px;">✅ ${r.content}</div>`;
+    if (r.type === 'empty') return `<div style="color:var(--muted);">📭 ${r.content}</div>`;
+    if (r.type === 'error') return `<div style="color:var(--accent2);">❌ ${r.content}</div>`;
+    if (r.type === 'done') return `<div style="color:var(--accent3);font-weight:600;border-top:1px solid var(--border);margin-top:10px;padding-top:10px;">🎉 ${r.content}</div>`;
+    if (r.type === 'link') return `<div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--accent);word-break:break-all;padding-left:12px;"><a href="${r.content}" target="_blank" style="color:var(--accent);text-decoration:none;">${r.content}</a></div>`;
+    if (r.type === 'summary') return `<div style="margin-top:10px;"><div style="font-weight:600;color:var(--text);">${r.name}</div><div style="color:var(--muted);font-size:12px;margin-top:4px;line-height:1.6;">${r.content}</div></div>`;
+    return `<div>${r.content}</div>`;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+async function clearResults() {
+  await api('/api/clear-results', 'POST', {});
+  document.getElementById('resultsBox').innerHTML = '<span style="color:var(--muted);">Results will appear here in real time...</span>';
+  document.getElementById('taskBadge').textContent = 'idle';
 }
 
 // ── AI Reply toggle ────────────────────────────────────────────────
@@ -691,11 +789,6 @@ async function doSummariseChat() {
 }
 
 // ── Links ──────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('linkSource').addEventListener('change', function() {
-    document.getElementById('customGroupRow').style.display = this.value === 'custom' ? 'block' : 'none';
-  });
-});
 
 async function doScrapeLinks() {
   const filter = document.getElementById('linkFilter').value;
@@ -748,30 +841,88 @@ function renderGroups(groups) {
 }
 
 // ── Dialogs ────────────────────────────────────────────────────────
+let currentModalName = "";
+
 async function loadDialogs() {
-  const list = document.getElementById('dialogList');
-  list.innerHTML = '<div style="color:var(--muted);font-size:13px;" class="pulse">Loading...</div>';
+  document.getElementById('dmList').innerHTML = '<div style="color:var(--muted);font-size:13px;" class="pulse">Loading...</div>';
+  document.getElementById('groupList').innerHTML = '<div style="color:var(--muted);font-size:13px;" class="pulse">Loading...</div>';
   try {
     const data = await api('/api/dialogs');
-    if (!data.dialogs || data.dialogs.length === 0) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:13px;">No chats found</div>';
-      return;
-    }
-    list.innerHTML = data.dialogs.map(d => `
-      <div class="dialog-item" onclick="summariseChatFromDashboard('${d.name.replace(/'/g,"\\'")}')">
-        <div class="dialog-avatar">${d.name[0].toUpperCase()}</div>
-        <div style="flex:1;">
-          <div class="dialog-name">${d.name}</div>
-          <div class="dialog-type">${d.type === 'user' ? '👤 Direct message' : '👥 Group / Channel'}</div>
+    if (!data.ok) throw new Error(data.error || 'Failed');
+
+    // DMs
+    if (!data.dms || data.dms.length === 0) {
+      document.getElementById('dmList').innerHTML = '<div style="color:var(--muted);font-size:13px;">No DMs found</div>';
+    } else {
+      document.getElementById('dmList').innerHTML = data.dms.map(d => `
+        <div class="dialog-item" onclick="openContext('${d.name.replace(/'/g,"\\'")}', \`${(d.context||'').replace(/`/g,'\\`')}\`)">
+          <div class="dialog-avatar" style="background:linear-gradient(135deg,var(--accent),var(--accent2))">${d.name[0].toUpperCase()}</div>
+          <div style="flex:1;">
+            <div class="dialog-name">${d.name}</div>
+            <div class="dialog-type">${d.context ? '✏️ Context set' : '💬 No context yet — tap to add'}</div>
+          </div>
+          ${d.unread > 0 ? `<div class="unread-badge">${d.unread}</div>` : ''}
+          <div style="color:var(--accent);font-size:18px;margin-left:6px;">+</div>
         </div>
-        ${d.unread > 0 ? `<div class="unread-badge">${d.unread}</div>` : ''}
-        <div style="color:var(--muted);font-size:18px;margin-left:4px;">›</div>
-      </div>
-    `).join('');
+      `).join('');
+    }
+
+    // Groups
+    if (!data.groups || data.groups.length === 0) {
+      document.getElementById('groupList').innerHTML = '<div style="color:var(--muted);font-size:13px;">No groups found</div>';
+    } else {
+      document.getElementById('groupList').innerHTML = data.groups.map(d => `
+        <div class="dialog-item" onclick="summariseChatFromDashboard('${d.name.replace(/'/g,"\\'")}')">
+          <div class="dialog-avatar" style="background:linear-gradient(135deg,#43e97b,#38f9d7)">${d.name[0].toUpperCase()}</div>
+          <div style="flex:1;">
+            <div class="dialog-name">${d.name}</div>
+            <div class="dialog-type">👥 Group / Channel</div>
+          </div>
+          ${d.unread > 0 ? `<div class="unread-badge">${d.unread}</div>` : ''}
+          <div style="color:var(--muted);font-size:18px;margin-left:6px;">›</div>
+        </div>
+      `).join('');
+    }
   } catch(e) {
-    list.innerHTML = '<div style="color:var(--accent2);font-size:13px;">Failed to load chats</div>';
+    document.getElementById('dmList').innerHTML = `<div style="color:var(--accent2);font-size:13px;">Failed to load: ${e.message}</div>`;
+    document.getElementById('groupList').innerHTML = '';
   }
 }
+
+function openContext(name, existingContext) {
+  currentModalName = name;
+  document.getElementById('modalName').textContent = name;
+  document.getElementById('modalContext').value = existingContext || '';
+  const modal = document.getElementById('contextModal');
+  modal.style.display = 'flex';
+}
+
+function closeModal() {
+  document.getElementById('contextModal').style.display = 'none';
+  currentModalName = '';
+}
+
+async function saveContext() {
+  const context = document.getElementById('modalContext').value.trim();
+  setLoading('btnSaveCtx', true);
+  try {
+    await api('/api/chat-context', 'POST', { name: currentModalName, context });
+    toast(`✅ Context saved for ${currentModalName}`, 'success');
+    closeModal();
+    loadDialogs();
+  } catch(e) { toast('Error saving context', 'error'); }
+  setLoading('btnSaveCtx', false);
+}
+
+// Close modal on backdrop click
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('contextModal').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+  });
+  document.getElementById('linkSource').addEventListener('change', function() {
+    document.getElementById('customGroupRow').style.display = this.value === 'custom' ? 'block' : 'none';
+  });
+});
 
 function summariseChatFromDashboard(name) {
   document.getElementById('singleChatName').value = name;
@@ -779,11 +930,12 @@ function summariseChatFromDashboard(name) {
   toast(`Set to summarise: ${name}`, 'info');
 }
 
+
 // ── Persona ────────────────────────────────────────────────────────
 const DEFAULT_PERSONA = `You are replying on behalf of the user named {my_name} in a Telegram chat.
 
 About the user:
-- Casual and friendly, plain English, he has his website named nikshep.vercel.app
+- Casual and friendly, plain English
 - Uses short forms naturally: irl, imo, ig, obv, fs, ngl, rn, rly, tbh, lmao, fr
 - Replies are SHORT — 1 to 3 sentences max
 - No emojis unless the other person uses them first
