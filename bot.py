@@ -31,8 +31,10 @@ state = {
     "me": None,
     "status_log": [],
     "chat_contexts": {},
-    "results": [],          # real-time results shown in app
-    "task_status": "idle",  # idle | running | done
+    "results": [],
+    "task_status": "idle",
+    "messages_today": 0,
+    "goodbye_senders": set(),
 }
 
 LINK_FILTERS = {
@@ -346,11 +348,33 @@ About the user:
 - Never reveals being an AI
 - If asked something personal the user hasn't shared, give a vague natural deflection
 - Reads the FULL conversation history carefully before replying
-- Matches the energy and tone of the conversation"""
+- Matches the energy and tone of the conversation
+
+CRITICAL RULES ABOUT CONTINUING THE CONVERSATION:
+- NEVER treat "ok", "okay", "hm", "lol", "haha", "nice", "cool", "k" as conversation-enders
+- These are just acknowledgements — always keep the conversation going naturally
+- Ask a follow-up question, share a thought, or react to what they said
+- Only end the conversation if they explicitly say a FINAL goodbye like "bye", "gotta go", "ttyl", "talk later", "gtg", "see you", "good night"
+- Even then, send ONE warm closing message like "buh bye!", "talk soon!", "catch you later!" — then stop replying
+- If unsure whether it's goodbye, keep chatting"""
 
 # Editable persona stored in state
 state["ai_persona"] = DEFAULT_PERSONA
 state["my_name"] = "me"
+
+# Track goodbye state per sender so AI stops after final bye
+goodbye_senders = set()
+
+FINAL_GOODBYE_WORDS = ["bye", "goodbye", "gotta go", "gtg", "ttyl", "talk later", "see you", "see ya", "good night", "gn", "take care", "cya"]
+
+def is_final_goodbye(text: str) -> bool:
+    t = text.lower().strip()
+    return any(w in t for w in FINAL_GOODBYE_WORDS)
+
+def is_just_acknowledgement(text: str) -> bool:
+    t = text.lower().strip()
+    acks = ["ok", "okay", "k", "lol", "haha", "hah", "hm", "hmm", "nice", "cool", "wow", "oh", "ah", "yeah", "yep", "yup", "sure", "alright", "aight", "ikr", "ik", "true", "facts", "fr", "lmao", "lmfao", "😂", "😅", "👍", "🙏"]
+    return t in acks
 
 
 @client.on(events.NewMessage(incoming=True))
@@ -362,7 +386,12 @@ async def handle_ai_autoreply(event):
         if not sender or getattr(sender, "bot", False):
             return
         sender_name = getattr(sender, "first_name", None) or "Someone"
+        sender_id = event.sender_id
         my_name = state.get("my_name", "me")
+
+        # If sender already said final goodbye, stop replying
+        if sender_id in goodbye_senders:
+            return
 
         # Scrape full conversation history (up to 40 messages)
         history = []
@@ -377,17 +406,40 @@ async def handle_ai_autoreply(event):
         chat_context = state["chat_contexts"].get(sender_name, "")
         extra = f"\nExtra context about {sender_name}:\n{chat_context}\n" if chat_context else ""
 
-        prompt = f"""{persona}
+        # Detect final goodbye
+        if is_final_goodbye(event.text):
+            goodbye_senders.add(sender_id)
+            farewell_prompt = f"""{persona}
 {extra}
+Conversation:
+{full_convo}
+
+{sender_name} just said goodbye: "{event.text}"
+
+Send ONE short warm farewell. Like "buh bye!", "talk soon!", "catch you later!" — keep it natural and brief:"""
+            reply = await call_openrouter(farewell_prompt)
+            await event.reply(reply)
+            state["messages_today"] = state.get("messages_today", 0) + 1
+            log(f"AI sent farewell to {sender_name}, stopping replies")
+            return
+
+        # Build prompt — explicitly tell AI to keep convo going
+        convo_note = ""
+        if is_just_acknowledgement(event.text):
+            convo_note = f'\nNOTE: "{event.text}" is just an acknowledgement, NOT a goodbye. Keep the conversation going — ask something, share a thought, react naturally.\n'
+
+        prompt = f"""{persona}
+{extra}{convo_note}
 Full conversation with {sender_name}:
 {full_convo}
 
 {sender_name} just sent: {event.text}
 
-Reply as {my_name} (short, casual, no unnecessary emojis):"""
+Reply as {my_name} (short, casual, keep conversation going, no unnecessary emojis):"""
 
         reply = await call_openrouter(prompt)
         await event.reply(reply)
+        state["messages_today"] = state.get("messages_today", 0) + 1
         log(f"AI replied to {sender_name}")
     except Exception as e:
         log(f"AI reply error: {e}")
@@ -455,6 +507,7 @@ async def api_status(request):
         "my_name": state.get("my_name", "me"),
         "task_status": state["task_status"],
         "results": state["results"],
+        "messages_today": state.get("messages_today", 0),
     })
 
 async def api_clear_results(request):
@@ -745,6 +798,15 @@ async def main():
     state["me"] = me
     log(f"✅ Logged in as {me.first_name} (@{me.username})")
     log(f"✅ Model: {OPENROUTER_MODEL}")
+
+    async def midnight_reset():
+        while True:
+            await asyncio.sleep(86400)
+            state["messages_today"] = 0
+            goodbye_senders.clear()
+            log("Daily counters reset")
+
+    asyncio.create_task(midnight_reset())
 
     app = make_app()
     runner = web.AppRunner(app)
