@@ -24,7 +24,7 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 # ─── GLOBAL STATE ────────────────────────────────────────────────────
 state = {
-    "ai_reply": False,
+    "ai_reply": True,
     "autoreply": {"active": False, "message": ""},
     "autoreply_replied": set(),
     "scrape_groups": [],   # saved group names for .scrape
@@ -331,14 +331,23 @@ async def handle_aireply_toggle(event):
     log(f"AI reply: {status}")
 
 
-AI_PERSONA = """You are replying on behalf of the user in a Telegram chat.
-Rules:
+DEFAULT_PERSONA = """You are replying on behalf of the user named {my_name} in a Telegram chat.
+
+About the user:
 - Casual and friendly, plain English
-- Short forms: irl, imo, ig, obv, fs, ngl, rn, lol, rly, tbh
-- 1 to 3 sentences max
-- Natural, human, never robotic
-- Read context carefully
-- Never reveal you are an AI"""
+- Uses short forms naturally: irl, imo, ig, obv, fs, ngl, rn, rly, tbh, lmao, fr
+- Replies are SHORT — 1 to 3 sentences max
+- No emojis unless the other person uses them first
+- Sounds human and natural, never robotic or formal
+- Never starts a reply with "Hey" every single time — vary the opening
+- Never reveals being an AI
+- If asked something personal the user hasn't shared, give a vague natural deflection
+- Reads the FULL conversation history carefully before replying
+- Matches the energy and tone of the conversation"""
+
+# Editable persona stored in state
+state["ai_persona"] = DEFAULT_PERSONA
+state["my_name"] = "me"
 
 
 @client.on(events.NewMessage(incoming=True))
@@ -349,15 +358,32 @@ async def handle_ai_autoreply(event):
         sender = await event.get_sender()
         if not sender or getattr(sender, "bot", False):
             return
-        sender_name = getattr(sender, "first_name", "Someone") or "Someone"
+        sender_name = getattr(sender, "first_name", None) or "Someone"
+        my_name = state.get("my_name", "me")
+
+        # Scrape full conversation history (up to 40 messages)
         history = []
-        async for msg in client.iter_messages(event.chat_id, limit=10):
+        async for msg in client.iter_messages(event.chat_id, limit=40):
             if msg.text:
-                history.append(f"{'Me' if msg.out else sender_name}: {msg.text}")
+                who = my_name if msg.out else sender_name
+                history.append(f"{who}: {msg.text}")
         history.reverse()
-        prompt = f"""{AI_PERSONA}\n\nConversation:\n{chr(10).join(history)}\n\nNew message from {sender_name}: {event.text}\n\nReply (1-3 sentences):"""
+        full_convo = "\n".join(history)
+
+        persona = state["ai_persona"].replace("{my_name}", my_name)
+
+        prompt = f"""{persona}
+
+Full conversation with {sender_name}:
+{full_convo}
+
+{sender_name} just sent: {event.text}
+
+Reply as {my_name} (short, casual, no unnecessary emojis):"""
+
         reply = await call_openrouter(prompt)
         await event.reply(reply)
+        log(f"AI replied to {sender_name}")
     except Exception as e:
         log(f"AI reply error: {e}")
 
@@ -420,7 +446,18 @@ async def api_status(request):
         "scrape_groups": state["scrape_groups"],
         "model": OPENROUTER_MODEL,
         "log": state["status_log"][-10:],
+        "ai_persona": state.get("ai_persona", ""),
+        "my_name": state.get("my_name", "me"),
     })
+
+async def api_update_persona(request):
+    data = await request.json()
+    if "persona" in data:
+        state["ai_persona"] = data["persona"]
+    if "my_name" in data and data["my_name"].strip():
+        state["my_name"] = data["my_name"].strip()
+    log(f"AI persona updated via web")
+    return web.json_response({"ok": True})
 
 async def api_toggle_ai(request):
     data = await request.json()
@@ -592,7 +629,7 @@ def make_app():
     app.router.add_post("/api/summarise-chat", api_summarise_chat)
     app.router.add_post("/api/links", api_scrape_links)
     app.router.add_post("/api/scrape-groups", api_scrape_groups)
-    app.router.add_get("/api/dialogs", api_dialogs)
+    app.router.add_post("/api/persona", api_update_persona)
     return app
 
 # ─── MAIN ────────────────────────────────────────────────────────────
