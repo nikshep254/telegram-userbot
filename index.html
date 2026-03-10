@@ -402,6 +402,10 @@
       <div class="stat-value" id="statGroups">0</div>
       <div class="stat-label">Saved Groups</div>
     </div>
+    <div class="stat-pill">
+      <div class="stat-value" id="statMsgs">0</div>
+      <div class="stat-label">Msgs Today</div>
+    </div>
   </div>
 
   <!-- AI Reply card -->
@@ -622,7 +626,42 @@
     </div>
   </div>
 
+  <!-- Feature Ideas -->
+  <div class="section-title" style="margin-top:28px;">What's Next — Feature Ideas</div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Coming Soon</div>
+      <div class="card-title">🕐 Scheduled Messages</div>
+      <div class="card-desc">Schedule a message to send to any contact at a specific time. Great for reminders or follow-ups.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Coming Soon</div>
+      <div class="card-title">📊 Chat Analytics</div>
+      <div class="card-desc">See who messages you most, peak hours, response time stats, and most active groups.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Coming Soon</div>
+      <div class="card-title">🔔 Keyword Alerts</div>
+      <div class="card-desc">Get notified in Saved Messages when someone mentions a keyword in any group.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Coming Soon</div>
+      <div class="card-title">🤫 Ghost Mode</div>
+      <div class="card-desc">Mark messages as read without opening the chat — avoid blue ticks while AI replies.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Coming Soon</div>
+      <div class="card-title">📝 Smart Notes</div>
+      <div class="card-desc">Type .note Call John tomorrow and it saves to Saved Messages as a todo.</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Coming Soon</div>
+      <div class="card-title">🧠 AI Memory</div>
+      <div class="card-desc">AI learns from your real conversations and updates its own context automatically over time.</div>
+    </div>
+  </div>
 
+  <div class="section-title" style="margin-top:28px;">System Log</div>
   <div class="card full">
     <div class="card-label">Activity</div>
     <div class="card-title">Recent Log</div>
@@ -686,6 +725,7 @@ async function loadStatus() {
     document.getElementById('statAuto').textContent = data.autoreply ? 'ON' : 'OFF';
     document.getElementById('statAuto').style.color = data.autoreply ? 'var(--accent3)' : 'var(--muted)';
     document.getElementById('statGroups').textContent = data.scrape_groups.length;
+    document.getElementById('statMsgs').textContent = data.messages_today || 0;
 
     // Toggles
     document.getElementById('aiToggle').checked = data.ai_reply;
