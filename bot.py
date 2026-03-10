@@ -27,9 +27,12 @@ state = {
     "ai_reply": True,
     "autoreply": {"active": False, "message": ""},
     "autoreply_replied": set(),
-    "scrape_groups": [],   # saved group names for .scrape
+    "scrape_groups": [],
     "me": None,
-    "status_log": [],      # last 20 status messages
+    "status_log": [],
+    "chat_contexts": {},
+    "results": [],          # real-time results shown in app
+    "task_status": "idle",  # idle | running | done
 }
 
 LINK_FILTERS = {
@@ -371,9 +374,11 @@ async def handle_ai_autoreply(event):
         full_convo = "\n".join(history)
 
         persona = state["ai_persona"].replace("{my_name}", my_name)
+        chat_context = state["chat_contexts"].get(sender_name, "")
+        extra = f"\nExtra context about {sender_name}:\n{chat_context}\n" if chat_context else ""
 
         prompt = f"""{persona}
-
+{extra}
 Full conversation with {sender_name}:
 {full_convo}
 
@@ -448,7 +453,14 @@ async def api_status(request):
         "log": state["status_log"][-10:],
         "ai_persona": state.get("ai_persona", ""),
         "my_name": state.get("my_name", "me"),
+        "task_status": state["task_status"],
+        "results": state["results"],
     })
+
+async def api_clear_results(request):
+    state["results"] = []
+    state["task_status"] = "idle"
+    return web.json_response({"ok": True})
 
 async def api_update_persona(request):
     data = await request.json()
@@ -476,88 +488,152 @@ async def api_toggle_autoreply(request):
 async def api_summarise(request):
     data = await request.json()
     limit = data.get("limit", MAX_CHATS)
+    state["results"] = []
+    state["task_status"] = "running"
     asyncio.create_task(do_summarise(limit))
-    return web.json_response({"ok": True, "message": f"Summarising {limit} chats — check Saved Messages!"})
+    return web.json_response({"ok": True, "message": f"Summarising {limit} chats..."})
 
 async def do_summarise(limit):
-    results = []
-    count = 0
-    async for dialog in client.iter_dialogs():
-        if count >= limit:
-            break
-        if dialog.archived:
-            continue
-        entity = dialog.entity
-        chat_name = dialog.name or "Unknown"
-        messages = []
-        async for msg in client.iter_messages(entity, limit=MESSAGES_PER_CHAT):
-            if msg.text:
-                try:
-                    sender = chat_name if isinstance(entity, User) else (getattr(await msg.get_sender(), "first_name", None) or "Someone")
-                except:
-                    sender = "Someone"
-                messages.append(f"{sender}: {msg.text}")
-        if not messages:
-            continue
-        messages.reverse()
-        summary = await summarise_chat(chat_name, messages)
-        if summary:
-            icon = "👤" if isinstance(entity, User) else "👥"
-            unread = f" • 🔴 {dialog.unread_count} unread" if dialog.unread_count > 0 else ""
-            results.append(f"{icon} {chat_name}{unread}\n{summary}")
-            count += 1
-    if results:
-        full = f"📋 Summary of {count} chats\n\n" + "\n\n".join(results)
-        for chunk in [full[i:i+4000] for i in range(0, len(full), 4000)]:
-            await client.send_message("me", chunk)
+    try:
+        results = []
+        count = 0
+        async for dialog in client.iter_dialogs():
+            if count >= limit:
+                break
+            if dialog.archived:
+                continue
+            entity = dialog.entity
+            chat_name = dialog.name or "Unknown"
+            state["results"].append({"type": "status", "content": f"Processing {chat_name}..."})
+            messages = []
+            async for msg in client.iter_messages(entity, limit=MESSAGES_PER_CHAT):
+                if msg.text:
+                    try:
+                        sender = chat_name if isinstance(entity, User) else (getattr(await msg.get_sender(), "first_name", None) or "Someone")
+                    except:
+                        sender = "Someone"
+                    messages.append(f"{sender}: {msg.text}")
+            if not messages:
+                continue
+            messages.reverse()
+            summary = await summarise_chat(chat_name, messages)
+            if summary:
+                icon = "👤" if isinstance(entity, User) else "👥"
+                unread = f" • {dialog.unread_count} unread" if dialog.unread_count > 0 else ""
+                state["results"].append({"type": "summary", "name": f"{icon} {chat_name}{unread}", "content": summary})
+                results.append(f"{icon} {chat_name}{unread}\n{summary}")
+                count += 1
+        state["task_status"] = "done"
+        if results:
+            full = f"📋 Summary of {count} chats\n\n" + "\n\n".join(results)
+            for chunk in [full[i:i+4000] for i in range(0, len(full), 4000)]:
+                await client.send_message("me", chunk)
+    except Exception as e:
+        state["results"].append({"type": "error", "content": str(e)})
+        state["task_status"] = "done"
 
 async def api_scrape_links(request):
     data = await request.json()
     filter_key = data.get("filter", "all")
-    group = data.get("group", "")
+    group = data.get("group", "").strip()
     use_saved = data.get("use_saved", False)
+    state["results"] = []
+    state["task_status"] = "running"
     asyncio.create_task(do_scrape_links(filter_key, group, use_saved))
-    return web.json_response({"ok": True, "message": "Scraping links — check Saved Messages!"})
+    return web.json_response({"ok": True, "message": "Scraping started..."})
 
 async def do_scrape_links(filter_key, group_query, use_saved):
-    pattern = LINK_FILTERS.get(filter_key, LINK_FILTERS["all"])
-    URL_REGEX = re.compile(pattern, re.IGNORECASE)
-    all_links = []
-    groups_checked = 0
-    start = asyncio.get_event_loop().time()
-    async for dialog in client.iter_dialogs():
-        entity = dialog.entity
-        if isinstance(entity, User):
-            continue
-        name = dialog.name or ""
-        if use_saved:
-            if not any(g.lower() in name.lower() for g in state["scrape_groups"]):
+    def push(item_type, content):
+        state["results"].append({"type": item_type, "content": content})
+        log(content)
+
+    try:
+        pattern = LINK_FILTERS.get(filter_key, LINK_FILTERS["all"])
+        URL_REGEX = re.compile(pattern, re.IGNORECASE)
+        all_links = []
+        groups_checked = 0
+        start = asyncio.get_event_loop().time()
+
+        # Support t.me/ links directly
+        tme_match = re.match(r'(?:https?://)?t\.me/([a-zA-Z0-9_]+)', group_query or "")
+        if tme_match:
+            username = tme_match.group(1)
+            push("status", f"Resolving t.me/{username}...")
+            try:
+                entity = await client.get_entity(username)
+                name = getattr(entity, "title", None) or getattr(entity, "username", username)
+                push("status", f"Scraping {name}...")
+                group_links = []
+                async for msg in client.iter_messages(entity, limit=200):
+                    if not msg.text:
+                        continue
+                    found = URL_REGEX.findall(msg.text)
+                    group_links.extend(found)
+                elapsed = asyncio.get_event_loop().time() - start
+                if group_links:
+                    unique = list(dict.fromkeys(group_links))
+                    push("result", f"📌 {name} — {len(unique)} {filter_key} links found ({elapsed:.0f}s)")
+                    for link in unique:
+                        push("link", link)
+                    await client.send_message("me", f"🔗 {filter_key.upper()} from {name} ({len(unique)} links)\n\n" + "\n".join(unique))
+                else:
+                    push("empty", f"No {filter_key} links found in {name} ({elapsed:.0f}s)")
+                    await client.send_message("me", f"📭 No {filter_key} links found in {name}")
+            except Exception as e:
+                push("error", f"Could not access t.me/{username}: {e}")
+            state["task_status"] = "done"
+            return
+
+        # Normal group name / saved groups scrape
+        async for dialog in client.iter_dialogs():
+            entity = dialog.entity
+            if isinstance(entity, User):
                 continue
-        elif group_query:
-            if group_query.lower() not in name.lower():
-                continue
-        groups_checked += 1
-        group_links = []
-        async for msg in client.iter_messages(entity, limit=200):
-            if not msg.text:
-                continue
-            found = URL_REGEX.findall(msg.text)
-            group_links.extend(found)
-            if len(group_links) >= 50:
+            name = dialog.name or ""
+            if use_saved:
+                if not any(g.lower() in name.lower() for g in state["scrape_groups"]):
+                    continue
+            elif group_query:
+                if group_query.lower() not in name.lower():
+                    continue
+            groups_checked += 1
+            push("status", f"Checking {name}...")
+            group_links = []
+            async for msg in client.iter_messages(entity, limit=200):
+                if not msg.text:
+                    continue
+                found = URL_REGEX.findall(msg.text)
+                group_links.extend(found)
+                if len(group_links) >= 50:
+                    break
+            if group_links:
+                unique = list(dict.fromkeys(group_links))
+                all_links.append((name, unique))
+                push("result", f"📌 {name} — {len(unique)} links")
+                for link in unique:
+                    push("link", link)
+            else:
+                push("empty", f"No {filter_key} links in {name}")
+            if group_query and all_links:
                 break
-        if group_links:
-            unique = list(dict.fromkeys(group_links))
-            all_links.append(f"📌 {name} ({len(unique)})\n" + "\n".join(unique))
-        if group_query and all_links:
-            break
-    elapsed = asyncio.get_event_loop().time() - start
-    if all_links:
-        total = sum(len(g.split("\n")) - 1 for g in all_links)
-        full = f"🔗 {filter_key.upper()} — {total} links, {groups_checked} groups ({elapsed:.0f}s)\n\n" + "\n\n".join(all_links)
-        for chunk in [full[i:i+4000] for i in range(0, len(full), 4000)]:
-            await client.send_message("me", chunk)
-    else:
-        await client.send_message("me", f"📭 No {filter_key} links found. ({elapsed:.0f}s)")
+
+        elapsed = asyncio.get_event_loop().time() - start
+        if all_links:
+            total = sum(len(l) for _, l in all_links)
+            push("done", f"Done — {total} {filter_key} links from {groups_checked} groups ({elapsed:.0f}s)")
+            full = f"🔗 {filter_key.upper()} — {total} links, {groups_checked} groups ({elapsed:.0f}s)\n\n"
+            full += "\n\n".join(f"📌 {n} ({len(l)})\n" + "\n".join(l) for n, l in all_links)
+            for chunk in [full[i:i+4000] for i in range(0, len(full), 4000)]:
+                await client.send_message("me", chunk)
+        else:
+            push("empty", f"No {filter_key} links found in any group ({elapsed:.0f}s)")
+            await client.send_message("me", f"📭 No {filter_key} links found ({elapsed:.0f}s)")
+
+    except Exception as e:
+        state["results"].append({"type": "error", "content": str(e)})
+        log(f"Scrape error: {e}")
+    finally:
+        state["task_status"] = "done"
 
 async def api_scrape_groups(request):
     data = await request.json()
@@ -571,22 +647,45 @@ async def api_scrape_groups(request):
     return web.json_response({"ok": True, "groups": state["scrape_groups"]})
 
 async def api_dialogs(request):
-    dialogs = []
-    count = 0
-    async for dialog in client.iter_dialogs():
-        if count >= 30:
-            break
-        if dialog.archived:
-            continue
-        entity = dialog.entity
-        dialogs.append({
-            "name": dialog.name or "Unknown",
-            "type": "user" if isinstance(entity, User) else "group",
-            "unread": dialog.unread_count,
-            "id": str(dialog.id),
-        })
-        count += 1
-    return web.json_response({"ok": True, "dialogs": dialogs})
+    try:
+        dms = []
+        groups = []
+        count = 0
+        async for dialog in client.iter_dialogs():
+            if count >= 60:
+                break
+            if dialog.archived:
+                continue
+            try:
+                entity = dialog.entity
+                name = dialog.name or "Unknown"
+                is_user = isinstance(entity, User) and not getattr(entity, "bot", False) and not getattr(entity, "is_self", False)
+                item = {
+                    "name": name,
+                    "type": "dm" if is_user else "group",
+                    "unread": dialog.unread_count or 0,
+                    "id": str(dialog.id),
+                    "context": state["chat_contexts"].get(name, ""),
+                }
+                if is_user:
+                    dms.append(item)
+                else:
+                    groups.append(item)
+                count += 1
+            except:
+                continue
+        return web.json_response({"ok": True, "dms": dms, "groups": groups})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+async def api_set_context(request):
+    data = await request.json()
+    name = data.get("name", "")
+    context = data.get("context", "")
+    if name:
+        state["chat_contexts"][name] = context
+        log(f"Context set for {name}")
+    return web.json_response({"ok": True})
 
 async def api_summarise_chat(request):
     data = await request.json()
@@ -629,7 +728,10 @@ def make_app():
     app.router.add_post("/api/summarise-chat", api_summarise_chat)
     app.router.add_post("/api/links", api_scrape_links)
     app.router.add_post("/api/scrape-groups", api_scrape_groups)
+    app.router.add_get("/api/dialogs", api_dialogs)
     app.router.add_post("/api/persona", api_update_persona)
+    app.router.add_post("/api/chat-context", api_set_context)
+    app.router.add_post("/api/clear-results", api_clear_results)
     return app
 
 # ─── MAIN ────────────────────────────────────────────────────────────
