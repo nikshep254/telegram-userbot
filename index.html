@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TG Control</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --surface2: #1a1a24;
+    --border: #2a2a3a;
+    --accent: #6c63ff;
+    --accent2: #ff6584;
+    --accent3: #43e97b;
+    --text: #e8e8f0;
+    --muted: #6b6b80;
+    --card-shadow: 0 4px 24px rgba(108,99,255,0.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(108,99,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(108,99,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 24px 16px 60px; }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .header-left { display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .header-title { font-family: 'Space Mono', monospace; font-size: 18px; font-weight: 700; }
+  .header-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .status-badge {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-family: 'Space Mono', monospace;
+  }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .dot.online { background: var(--accent3); box-shadow: 0 0 8px var(--accent3); }
+
+  /* Grid */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  @media (max-width: 600px) {
+    .grid, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  /* Card */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: var(--card-shadow);
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .card:hover { border-color: rgba(108,99,255,0.3); }
+  .card.full { grid-column: 1 / -1; }
+  .card-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .card-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .card-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  /* Toggle */
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 14px;
+  }
+  .toggle-info { flex: 1; }
+  .toggle {
+    position: relative; width: 48px; height: 26px; flex-shrink: 0;
+    cursor: pointer; margin-left: 12px;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track {
+    position: absolute; inset: 0;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    transition: all 0.25s;
+  }
+  .toggle input:checked + .toggle-track {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(108,99,255,0.4);
+  }
+  .toggle-knob {
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 18px; height: 18px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.25s;
+    pointer-events: none;
+  }
+  .toggle input:checked ~ .toggle-knob { transform: translateX(22px); }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+  }
+  .btn-primary:hover { background: #7c74ff; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(108,99,255,0.35); }
+  .btn-secondary {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-danger {
+    background: rgba(255,101,132,0.12);
+    color: var(--accent2);
+    border: 1px solid rgba(255,101,132,0.2);
+  }
+  .btn-danger:hover { background: rgba(255,101,132,0.2); }
+  .btn-success {
+    background: rgba(67,233,123,0.12);
+    color: var(--accent3);
+    border: 1px solid rgba(67,233,123,0.2);
+  }
+  .btn-success:hover { background: rgba(67,233,123,0.2); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+  .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
+
+  .btn-row { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+
+  /* Inputs */
+  input[type="text"], input[type="number"], select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+    margin-top: 8px;
+  }
+  input[type="text"]:focus, input[type="number"]:focus, select:focus {
+    border-color: var(--accent);
+  }
+  select option { background: var(--surface2); }
+  label { font-size: 12px; color: var(--muted); display: block; margin-top: 10px; }
+
+  /* Tags */
+  .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-size: 12px;
+    margin: 3px;
+  }
+  .tag .remove {
+    cursor: pointer; color: var(--muted);
+    font-size: 14px; line-height: 1;
+    transition: color 0.2s;
+  }
+  .tag .remove:hover { color: var(--accent2); }
+  .tags-container { margin-top: 10px; min-height: 32px; }
+
+  /* Dialog list */
+  .dialog-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s;
+    border: 1px solid transparent;
+  }
+  .dialog-item:hover { background: var(--surface2); border-color: var(--border); }
+  .dialog-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 600; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: white;
+  }
+  .dialog-name { font-size: 13px; font-weight: 500; flex: 1; }
+  .dialog-type { font-size: 10px; color: var(--muted); }
+  .unread-badge {
+    background: var(--accent2);
+    color: white;
+    border-radius: 10px;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  /* Section titles */
+  .section-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 28px 0 12px;
+  }
+
+  /* Toast */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 20px;
+    font-size: 13px;
+    z-index: 999;
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    white-space: nowrap;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+  #toast.success { border-color: var(--accent3); color: var(--accent3); }
+  #toast.error { border-color: var(--accent2); color: var(--accent2); }
+  #toast.info { border-color: var(--accent); color: var(--accent); }
+
+  /* User info */
+  .user-card {
+    display: flex; align-items: center; gap: 14px;
+    background: linear-gradient(135deg, rgba(108,99,255,0.08), rgba(255,101,132,0.05));
+    border: 1px solid rgba(108,99,255,0.2);
+    border-radius: 14px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+  }
+  .user-avatar {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 700; color: white; flex-shrink: 0;
+  }
+  .user-name { font-size: 16px; font-weight: 600; }
+  .user-handle { font-size: 12px; color: var(--muted); font-family: 'Space Mono', monospace; }
+  .user-model { font-size: 11px; color: var(--accent); margin-top: 4px; }
+
+  /* Stat pills */
+  .stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px; }
+  .stat-pill {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    flex: 1; min-width: 90px;
+    text-align: center;
+  }
+  .stat-value { font-family: 'Space Mono', monospace; font-size: 20px; font-weight: 700; color: var(--accent); }
+  .stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Spinner */
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading .spinner { display: block; }
+  .loading .btn-text { display: none; }
+
+  /* Divider */
+  .divider { height: 1px; background: var(--border); margin: 20px 0; }
+
+  /* Log */
+  .log-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    max-height: 120px;
+    overflow-y: auto;
+    line-height: 1.8;
+    margin-top: 10px;
+  }
+  .log-box::-webkit-scrollbar { width: 4px; }
+  .log-box::-webkit-scrollbar-track { background: transparent; }
+  .log-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* Fade in */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card { animation: fadeUp 0.4s ease both; }
+  .card:nth-child(1) { animation-delay: 0.05s; }
+  .card:nth-child(2) { animation-delay: 0.1s; }
+  .card:nth-child(3) { animation-delay: 0.15s; }
+  .card:nth-child(4) { animation-delay: 0.2s; }
+  .card:nth-child(5) { animation-delay: 0.25s; }
+
+  .pulse { animation: pulse 2s infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">⚡</div>
+      <div>
+        <div class="header-title">TG Control</div>
+        <div class="header-sub">Userbot Dashboard</div>
+      </div>
+    </div>
+    <div class="status-badge">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">connecting...</span>
+    </div>
+  </div>
+
+  <!-- User info -->
+  <div class="user-card" id="userCard" style="display:none">
+    <div class="user-avatar" id="userInitial">?</div>
+    <div>
+      <div class="user-name" id="userName">—</div>
+      <div class="user-handle" id="userHandle">—</div>
+      <div class="user-model" id="userModel">—</div>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stats-row">
+    <div class="stat-pill">
+      <div class="stat-value" id="statAi">—</div>
+      <div class="stat-label">AI Reply</div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-value" id="statAuto">—</div>
+      <div class="stat-label">Auto Reply</div>
+    </div>
+    <div class="stat-pill">
+      <div class="stat-value" id="statGroups">0</div>
+      <div class="stat-label">Saved Groups</div>
+    </div>
+  </div>
+
+  <!-- AI Reply card -->
+  <div class="section-title">Replies</div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">AI Reply</div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="card-title">Auto AI Reply</div>
+          <div class="card-desc">Replies to ALL incoming DMs using AI with conversation context</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="aiToggle" onchange="toggleAI(this)">
+          <div class="toggle-track"></div>
+          <div class="toggle-knob"></div>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Simple Auto Reply</div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <div class="card-title">Fixed Message Reply</div>
+          <div class="card-desc">Sends same message to everyone who DMs you</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="autoreplyToggle" onchange="toggleAutoreply(this)">
+          <div class="toggle-track"></div>
+          <div class="toggle-knob"></div>
+        </label>
+      </div>
+      <label>Custom message</label>
+      <input type="text" id="autoreplyMsg" placeholder="Hey! Busy rn, will reply soon 👍" />
+    </div>
+  </div>
+
+  <!-- Summarise -->
+  <div class="section-title">Summarise</div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Bulk Summarise</div>
+      <div class="card-title">Summarise Top Chats</div>
+      <div class="card-desc">Fetches and summarises your most active chats. Results sent to Saved Messages.</div>
+      <label>Number of chats</label>
+      <input type="number" id="summariseCount" value="10" min="1" max="50" />
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="doSummarise()" id="btnSummarise">
+          <div class="spinner"></div>
+          <span class="btn-text">📋 Summarise</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Single Chat</div>
+      <div class="card-title">Summarise One Chat</div>
+      <div class="card-desc">Search by name and summarise a specific chat.</div>
+      <label>Chat name</label>
+      <input type="text" id="singleChatName" placeholder="e.g. John, Work Group..." />
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="doSummariseChat()" id="btnSummariseChat">
+          <div class="spinner"></div>
+          <span class="btn-text">📋 Summarise Chat</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Links -->
+  <div class="section-title">Link Scraper</div>
+  <div class="card full">
+    <div class="card-label">Scrape Links</div>
+    <div class="card-title">Extract Links from Groups</div>
+    <div class="card-desc">Filter by type and source group. Results sent to Saved Messages.</div>
+    <div class="grid" style="margin-top:14px">
+      <div>
+        <label>Link type</label>
+        <select id="linkFilter">
+          <option value="all">🔗 All links</option>
+          <option value="mega">☁️ Mega.nz</option>
+          <option value="drive">📁 Google Drive</option>
+          <option value="youtube">▶️ YouTube</option>
+          <option value="telegram">✈️ Telegram links</option>
+          <option value="github">🐙 GitHub</option>
+          <option value="instagram">📸 Instagram</option>
+          <option value="twitter">🐦 Twitter / X</option>
+        </select>
+      </div>
+      <div>
+        <label>Source</label>
+        <select id="linkSource">
+          <option value="all">All groups</option>
+          <option value="saved">Saved groups only</option>
+          <option value="custom">Specific group</option>
+        </select>
+      </div>
+    </div>
+    <div id="customGroupRow" style="display:none; margin-top:4px;">
+      <label>Group name</label>
+      <input type="text" id="customGroupName" placeholder="e.g. Movies, Crypto..." />
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="doScrapeLinks()" id="btnLinks">
+        <div class="spinner"></div>
+        <span class="btn-text">🔗 Scrape Links</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Saved Groups -->
+  <div class="section-title">Saved Scrape Groups</div>
+  <div class="card full">
+    <div class="card-label">Group Management</div>
+    <div class="card-title">Groups to Scrape</div>
+    <div class="card-desc">Save group names so you can scrape them with one tap using "Saved groups only".</div>
+    <div style="display:flex; gap:8px; margin-top:14px;">
+      <input type="text" id="newGroupName" placeholder="Group name..." style="margin-top:0; flex:1;" onkeydown="if(event.key==='Enter')addGroup()" />
+      <button class="btn btn-secondary" onclick="addGroup()">Add</button>
+    </div>
+    <div class="tags-container" id="groupTags"></div>
+  </div>
+
+  <!-- Chats Dashboard -->
+  <div class="section-title">Dashboard — Recent Chats</div>
+  <div class="card full">
+    <div class="card-label">Live Chats</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div class="card-title">Your Chats</div>
+      <button class="btn btn-secondary btn-sm" onclick="loadDialogs()">↻ Refresh</button>
+    </div>
+    <div id="dialogList"><div style="color:var(--muted);font-size:13px;" class="pulse">Loading chats...</div></div>
+  </div>
+
+  <!-- Log -->
+  <div class="section-title">System Log</div>
+  <div class="card full">
+    <div class="card-label">Activity</div>
+    <div class="card-title">Recent Log</div>
+    <div class="log-box" id="logBox">Connecting...</div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+let currentState = {};
+
+// ── Toast ──────────────────────────────────────────────────────────
+function toast(msg, type='info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `show ${type}`;
+  setTimeout(() => t.className = '', 3000);
+}
+
+// ── API helpers ────────────────────────────────────────────────────
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+function setLoading(btnId, loading) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.classList.toggle('loading', loading);
+}
+
+// ── Load status ────────────────────────────────────────────────────
+async function loadStatus() {
+  try {
+    const data = await api('/api/status');
+    currentState = data;
+    if (!data.ok) return;
+
+    // Status dot
+    document.getElementById('statusDot').className = 'dot online';
+    document.getElementById('statusText').textContent = 'online';
+
+    // User card
+    if (data.user) {
+      document.getElementById('userCard').style.display = 'flex';
+      document.getElementById('userInitial').textContent = data.user.name[0].toUpperCase();
+      document.getElementById('userName').textContent = data.user.name;
+      document.getElementById('userHandle').textContent = '@' + (data.user.username || data.user.id);
+      document.getElementById('userModel').textContent = '⚡ ' + data.model;
+    }
+
+    // Stats
+    document.getElementById('statAi').textContent = data.ai_reply ? 'ON' : 'OFF';
+    document.getElementById('statAi').style.color = data.ai_reply ? 'var(--accent3)' : 'var(--muted)';
+    document.getElementById('statAuto').textContent = data.autoreply ? 'ON' : 'OFF';
+    document.getElementById('statAuto').style.color = data.autoreply ? 'var(--accent3)' : 'var(--muted)';
+    document.getElementById('statGroups').textContent = data.scrape_groups.length;
+
+    // Toggles
+    document.getElementById('aiToggle').checked = data.ai_reply;
+    document.getElementById('autoreplyToggle').checked = data.autoreply;
+    if (data.autoreply_message) document.getElementById('autoreplyMsg').placeholder = data.autoreply_message;
+
+    // Groups
+    renderGroups(data.scrape_groups);
+
+    // Log
+    const log = document.getElementById('logBox');
+    log.innerHTML = data.log.map(l => `<div>${l}</div>`).join('') || '<div>No logs yet</div>';
+    log.scrollTop = log.scrollHeight;
+
+  } catch(e) {
+    document.getElementById('statusText').textContent = 'offline';
+  }
+}
+
+// ── AI Reply toggle ────────────────────────────────────────────────
+async function toggleAI(el) {
+  try {
+    await api('/api/ai-reply', 'POST', { active: el.checked });
+    toast(el.checked ? '🤖 AI reply ON' : '🔕 AI reply OFF', el.checked ? 'success' : 'info');
+    loadStatus();
+  } catch(e) { toast('Error', 'error'); el.checked = !el.checked; }
+}
+
+// ── Autoreply toggle ───────────────────────────────────────────────
+async function toggleAutoreply(el) {
+  const msg = document.getElementById('autoreplyMsg').value || undefined;
+  try {
+    await api('/api/autoreply', 'POST', { active: el.checked, message: msg });
+    toast(el.checked ? '✅ Auto-reply ON' : '🔕 Auto-reply OFF', el.checked ? 'success' : 'info');
+    loadStatus();
+  } catch(e) { toast('Error', 'error'); el.checked = !el.checked; }
+}
+
+// ── Summarise ──────────────────────────────────────────────────────
+async function doSummarise() {
+  const limit = parseInt(document.getElementById('summariseCount').value) || 10;
+  setLoading('btnSummarise', true);
+  try {
+    const r = await api('/api/summarise', 'POST', { limit });
+    toast('📋 ' + r.message, 'success');
+  } catch(e) { toast('Error starting summarise', 'error'); }
+  setLoading('btnSummarise', false);
+}
+
+async function doSummariseChat() {
+  const name = document.getElementById('singleChatName').value.trim();
+  if (!name) { toast('Enter a chat name', 'error'); return; }
+  setLoading('btnSummariseChat', true);
+  try {
+    const r = await api('/api/summarise-chat', 'POST', { name });
+    toast('📋 ' + r.message, 'success');
+  } catch(e) { toast('Error', 'error'); }
+  setLoading('btnSummariseChat', false);
+}
+
+// ── Links ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('linkSource').addEventListener('change', function() {
+    document.getElementById('customGroupRow').style.display = this.value === 'custom' ? 'block' : 'none';
+  });
+});
+
+async function doScrapeLinks() {
+  const filter = document.getElementById('linkFilter').value;
+  const source = document.getElementById('linkSource').value;
+  const group = source === 'custom' ? document.getElementById('customGroupName').value.trim() : '';
+  const use_saved = source === 'saved';
+  if (source === 'custom' && !group) { toast('Enter a group name', 'error'); return; }
+  setLoading('btnLinks', true);
+  try {
+    const r = await api('/api/links', 'POST', { filter, group, use_saved });
+    toast('🔗 ' + r.message, 'success');
+  } catch(e) { toast('Error', 'error'); }
+  setLoading('btnLinks', false);
+}
+
+// ── Groups ─────────────────────────────────────────────────────────
+async function addGroup() {
+  const input = document.getElementById('newGroupName');
+  const name = input.value.trim();
+  if (!name) return;
+  input.value = '';
+  const groups = [...(currentState.scrape_groups || [])];
+  if (!groups.includes(name)) groups.push(name);
+  const r = await api('/api/scrape-groups', 'POST', { action: 'add', name });
+  currentState.scrape_groups = r.groups;
+  renderGroups(r.groups);
+  document.getElementById('statGroups').textContent = r.groups.length;
+  toast(`Added ${name}`, 'success');
+}
+
+async function removeGroup(name) {
+  const r = await api('/api/scrape-groups', 'POST', { action: 'remove', name });
+  currentState.scrape_groups = r.groups;
+  renderGroups(r.groups);
+  document.getElementById('statGroups').textContent = r.groups.length;
+}
+
+function renderGroups(groups) {
+  const container = document.getElementById('groupTags');
+  if (!groups || groups.length === 0) {
+    container.innerHTML = '<span style="color:var(--muted);font-size:12px;">No groups saved yet</span>';
+    return;
+  }
+  container.innerHTML = groups.map(g => `
+    <span class="tag">
+      ${g}
+      <span class="remove" onclick="removeGroup('${g.replace(/'/g,"\\'")}')">×</span>
+    </span>
+  `).join('');
+}
+
+// ── Dialogs ────────────────────────────────────────────────────────
+async function loadDialogs() {
+  const list = document.getElementById('dialogList');
+  list.innerHTML = '<div style="color:var(--muted);font-size:13px;" class="pulse">Loading...</div>';
+  try {
+    const data = await api('/api/dialogs');
+    if (!data.dialogs || data.dialogs.length === 0) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:13px;">No chats found</div>';
+      return;
+    }
+    list.innerHTML = data.dialogs.map(d => `
+      <div class="dialog-item" onclick="summariseChatFromDashboard('${d.name.replace(/'/g,"\\'")}')">
+        <div class="dialog-avatar">${d.name[0].toUpperCase()}</div>
+        <div style="flex:1;">
+          <div class="dialog-name">${d.name}</div>
+          <div class="dialog-type">${d.type === 'user' ? '👤 Direct message' : '👥 Group / Channel'}</div>
+        </div>
+        ${d.unread > 0 ? `<div class="unread-badge">${d.unread}</div>` : ''}
+        <div style="color:var(--muted);font-size:18px;margin-left:4px;">›</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = '<div style="color:var(--accent2);font-size:13px;">Failed to load chats</div>';
+  }
+}
+
+function summariseChatFromDashboard(name) {
+  document.getElementById('singleChatName').value = name;
+  document.getElementById('singleChatName').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast(`Set to summarise: ${name}`, 'info');
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+loadStatus();
+loadDialogs();
+setInterval(loadStatus, 10000);
+</script>
+</body>
+</html>
