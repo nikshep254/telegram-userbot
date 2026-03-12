@@ -14,7 +14,7 @@ load_dotenv()
 API_ID = int(os.getenv("TELEGRAM_API_ID"))
 API_HASH = os.getenv("TELEGRAM_API_HASH")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "arcee-ai/arcee-fusion")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "stepfun/step-3.5-flash:free")
 MESSAGES_PER_CHAT = int(os.getenv("MESSAGES_PER_CHAT", "30"))
 MAX_CHATS = int(os.getenv("MAX_CHATS", "10"))
 SESSION_STRING = os.getenv("TELEGRAM_SESSION", "")
@@ -34,7 +34,12 @@ state = {
     "results": [],
     "task_status": "idle",
     "messages_today": 0,
-    "goodbye_senders": set(),
+    # ── AI Memory: per-person learned facts ──
+    "ai_memory": {},
+    # ── Analytics ──
+    "analytics": {},        # { "Name": {"count": int, "last_seen": str, "hours": [24 ints]} }
+    "response_times": {},   # { "Name": [seconds, ...] }
+    "last_incoming_ts": {}, # { sender_id: timestamp } for response-time tracking
 }
 
 LINK_FILTERS = {
@@ -62,7 +67,7 @@ async def call_openrouter(prompt: str) -> str:
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://github.com/telegram-userbot",
-        "X-Title": "Telegram Userbot",
+        "X-Title": "TeleFlow AI",
     }
     payload = {
         "model": OPENROUTER_MODEL,
@@ -93,7 +98,7 @@ async def summarise_chat(chat_name, messages):
 @client.on(events.NewMessage(pattern=r"\.help", outgoing=True))
 async def handle_help(event):
     await event.delete()
-    await client.send_message("me", """🤖 **Userbot Commands**
+    await client.send_message("me", """🤖 **TeleFlow AI Commands**
 
 📋 **SUMMARISE**
 `.summarise` — Top 10 chats
@@ -115,6 +120,13 @@ async def handle_help(event):
 🤖 **AI REPLY**
 `.aireply on` — AI replies to ALL DMs
 `.aireply off` — Turn off
+
+🧠 **AI MEMORY**
+`.memory` — See all learned facts summary
+`.memory John` — Facts learned about John
+
+📊 **ANALYTICS**
+`.analytics` — Top senders, peak hours, response time
 
 💬 **SIMPLE REPLY**
 `.autoreply on Busy!` — Fixed reply
@@ -336,6 +348,55 @@ async def handle_aireply_toggle(event):
     log(f"AI reply: {status}")
 
 
+@client.on(events.NewMessage(pattern=r"\.memory ?(.+)?", outgoing=True))
+async def handle_memory_cmd(event):
+    await event.delete()
+    query = (event.pattern_match.group(1) or "").strip()
+    if not state["ai_memory"]:
+        await client.send_message("me", "🧠 No memories yet — AI learns as it chats!")
+        return
+    if query:
+        # Show memory for a specific person
+        matches = {k: v for k, v in state["ai_memory"].items() if query.lower() in k.lower()}
+        if not matches:
+            await client.send_message("me", f"🧠 No memory for '{query}'")
+            return
+        lines = []
+        for name, facts in matches.items():
+            lines.append(f"**{name}** ({len(facts)} facts)")
+            lines.extend(f"  • {f}" for f in facts)
+        await client.send_message("me", "🧠 **AI Memory**\n\n" + "\n".join(lines))
+    else:
+        # Summary of all people
+        summary = "\n".join(f"• {name}: {len(facts)} facts" for name, facts in sorted(state["ai_memory"].items(), key=lambda x: -len(x[1])))
+        await client.send_message("me", f"🧠 **AI Memory** — {len(state['ai_memory'])} people\n\n{summary}")
+
+
+@client.on(events.NewMessage(pattern=r"\.analytics", outgoing=True))
+async def handle_analytics_cmd(event):
+    await event.delete()
+    if not state["analytics"]:
+        await client.send_message("me", "📊 No analytics yet — start chatting!")
+        return
+    leaderboard = sorted(state["analytics"].items(), key=lambda x: -x[1]["count"])[:10]
+    lines = ["📊 **Chat Analytics**\n"]
+    lines.append("**Top DMs by messages:**")
+    for i, (name, data) in enumerate(leaderboard, 1):
+        lines.append(f"{i}. {name} — {data['count']} msgs")
+    total_hours = [0] * 24
+    for data in state["analytics"].values():
+        for i, c in enumerate(data.get("hours", [0]*24)):
+            total_hours[i] += c
+    peak_hour = total_hours.index(max(total_hours))
+    lines.append(f"\n**Peak hour:** {peak_hour:02d}:00–{(peak_hour+1)%24:02d}:00")
+    if state["response_times"]:
+        all_times = [t for times in state["response_times"].values() for t in times]
+        avg = sum(all_times) / len(all_times)
+        lines.append(f"**Avg AI response time:** {avg:.1f}s")
+    await client.send_message("me", "\n".join(lines))
+
+
+# ─── AI PERSONA + GOODBYE LOGIC ─────────────────────────────────────
 DEFAULT_PERSONA = """You are replying on behalf of the user named {my_name} in a Telegram chat.
 
 About the user:
@@ -358,14 +419,16 @@ CRITICAL RULES ABOUT CONTINUING THE CONVERSATION:
 - Even then, send ONE warm closing message like "buh bye!", "talk soon!", "catch you later!" — then stop replying
 - If unsure whether it's goodbye, keep chatting"""
 
-# Editable persona stored in state
 state["ai_persona"] = DEFAULT_PERSONA
 state["my_name"] = "me"
 
-# Track goodbye state per sender so AI stops after final bye
+# Per-session goodbye tracker — clears on restart / daily reset
 goodbye_senders = set()
 
-FINAL_GOODBYE_WORDS = ["bye", "goodbye", "gotta go", "gtg", "ttyl", "talk later", "see you", "see ya", "good night", "gn", "take care", "cya"]
+FINAL_GOODBYE_WORDS = [
+    "bye", "goodbye", "gotta go", "gtg", "ttyl", "talk later",
+    "see you", "see ya", "good night", "gn", "take care", "cya"
+]
 
 def is_final_goodbye(text: str) -> bool:
     t = text.lower().strip()
@@ -373,8 +436,80 @@ def is_final_goodbye(text: str) -> bool:
 
 def is_just_acknowledgement(text: str) -> bool:
     t = text.lower().strip()
-    acks = ["ok", "okay", "k", "lol", "haha", "hah", "hm", "hmm", "nice", "cool", "wow", "oh", "ah", "yeah", "yep", "yup", "sure", "alright", "aight", "ikr", "ik", "true", "facts", "fr", "lmao", "lmfao", "😂", "😅", "👍", "🙏"]
+    acks = [
+        "ok", "okay", "k", "lol", "haha", "hah", "hm", "hmm", "nice", "cool",
+        "wow", "oh", "ah", "yeah", "yep", "yup", "sure", "alright", "aight",
+        "ikr", "ik", "true", "facts", "fr", "lmao", "lmfao", "😂", "😅", "👍", "🙏"
+    ]
     return t in acks
+
+
+# ─── AI MEMORY ───────────────────────────────────────────────────────
+def get_memory_for(name: str) -> str:
+    facts = state["ai_memory"].get(name, [])
+    if not facts:
+        return ""
+    return f"\nWhat you've learned about {name} from past conversations:\n" + "\n".join(f"- {f}" for f in facts[-20:]) + "\n"
+
+async def extract_and_store_memory(sender_name: str, convo: str):
+    """After each AI reply, ask the model to extract new learnable facts about this person."""
+    existing = state["ai_memory"].get(sender_name, [])
+    existing_text = "\n".join(f"- {f}" for f in existing) if existing else "None yet."
+    prompt = f"""You are a memory extraction system. Read this conversation and extract NEW facts about {sender_name} that would help future AI replies sound more personal and accurate.
+
+Existing known facts:
+{existing_text}
+
+Conversation:
+{convo}
+
+Extract only NEW facts not already listed. Focus on: their interests, job, mood, relationships, plans, preferences, or anything personal they shared.
+If there's nothing genuinely new, return exactly: NONE
+
+Return as a plain list, one fact per line, no bullets or numbers. Max 5 facts. Be specific."""
+    try:
+        raw = await call_openrouter(prompt)
+        if raw.strip().upper() == "NONE" or not raw.strip():
+            return
+        new_facts = [line.strip() for line in raw.strip().splitlines() if line.strip() and len(line.strip()) > 8]
+        if not new_facts:
+            return
+        if sender_name not in state["ai_memory"]:
+            state["ai_memory"][sender_name] = []
+        # Avoid near-duplicates
+        existing_lower = [f.lower() for f in state["ai_memory"][sender_name]]
+        for fact in new_facts:
+            if fact.lower() not in existing_lower:
+                state["ai_memory"][sender_name].append(fact)
+        # Cap per person at 50 facts
+        state["ai_memory"][sender_name] = state["ai_memory"][sender_name][-50:]
+        log(f"Memory updated for {sender_name} (+{len(new_facts)} facts)")
+    except Exception as e:
+        log(f"Memory extraction error: {e}")
+
+# ─── ANALYTICS TRACKING ──────────────────────────────────────────────
+from datetime import datetime, timezone
+
+def track_incoming(sender_name: str, sender_id: int, msg_time: datetime):
+    """Record incoming message for analytics."""
+    hour = msg_time.hour
+    if sender_name not in state["analytics"]:
+        state["analytics"][sender_name] = {"count": 0, "last_seen": "", "hours": [0]*24}
+    state["analytics"][sender_name]["count"] += 1
+    state["analytics"][sender_name]["last_seen"] = msg_time.isoformat()
+    state["analytics"][sender_name]["hours"][hour] += 1
+    state["last_incoming_ts"][sender_id] = msg_time.timestamp()
+
+def track_response_time(sender_name: str, sender_id: int):
+    """Record how long it took to reply after incoming message."""
+    ts = state["last_incoming_ts"].get(sender_id)
+    if ts:
+        elapsed = datetime.now(timezone.utc).timestamp() - ts
+        if elapsed < 3600:  # only count if under 1 hr (not stale)
+            if sender_name not in state["response_times"]:
+                state["response_times"][sender_name] = []
+            state["response_times"][sender_name].append(round(elapsed, 1))
+            state["response_times"][sender_name] = state["response_times"][sender_name][-100:]
 
 
 @client.on(events.NewMessage(incoming=True))
@@ -389,11 +524,15 @@ async def handle_ai_autoreply(event):
         sender_id = event.sender_id
         my_name = state.get("my_name", "me")
 
-        # If sender already said final goodbye, stop replying
+        # Track analytics for every incoming DM
+        msg_time = event.date if event.date.tzinfo else event.date.replace(tzinfo=timezone.utc)
+        track_incoming(sender_name, sender_id, msg_time)
+
+        # If sender already said final goodbye this session, stop replying
         if sender_id in goodbye_senders:
             return
 
-        # Scrape full conversation history (up to 40 messages)
+        # Read last 40 messages for full context
         history = []
         async for msg in client.iter_messages(event.chat_id, limit=40):
             if msg.text:
@@ -406,30 +545,34 @@ async def handle_ai_autoreply(event):
         chat_context = state["chat_contexts"].get(sender_name, "")
         extra = f"\nExtra context about {sender_name}:\n{chat_context}\n" if chat_context else ""
 
-        # Detect final goodbye
+        # Inject AI memory
+        memory_context = get_memory_for(sender_name)
+
+        # Detect final goodbye — send warm farewell then stop
         if is_final_goodbye(event.text):
             goodbye_senders.add(sender_id)
             farewell_prompt = f"""{persona}
-{extra}
+{extra}{memory_context}
 Conversation:
 {full_convo}
 
 {sender_name} just said goodbye: "{event.text}"
 
-Send ONE short warm farewell. Like "buh bye!", "talk soon!", "catch you later!" — keep it natural and brief:"""
+Send ONE short warm farewell like "buh bye!", "talk soon!", "catch you later!" — keep it natural and brief:"""
             reply = await call_openrouter(farewell_prompt)
             await event.reply(reply)
+            track_response_time(sender_name, sender_id)
             state["messages_today"] = state.get("messages_today", 0) + 1
             log(f"AI sent farewell to {sender_name}, stopping replies")
             return
 
-        # Build prompt — explicitly tell AI to keep convo going
+        # For acknowledgements, explicitly tell AI to keep conversation going
         convo_note = ""
         if is_just_acknowledgement(event.text):
             convo_note = f'\nNOTE: "{event.text}" is just an acknowledgement, NOT a goodbye. Keep the conversation going — ask something, share a thought, react naturally.\n'
 
         prompt = f"""{persona}
-{extra}{convo_note}
+{extra}{memory_context}{convo_note}
 Full conversation with {sender_name}:
 {full_convo}
 
@@ -439,8 +582,13 @@ Reply as {my_name} (short, casual, keep conversation going, no unnecessary emoji
 
         reply = await call_openrouter(prompt)
         await event.reply(reply)
+        track_response_time(sender_name, sender_id)
         state["messages_today"] = state.get("messages_today", 0) + 1
         log(f"AI replied to {sender_name}")
+
+        # Fire memory extraction in background — don't block the reply
+        asyncio.create_task(extract_and_store_memory(sender_name, full_convo))
+
     except Exception as e:
         log(f"AI reply error: {e}")
 
@@ -515,13 +663,65 @@ async def api_clear_results(request):
     state["task_status"] = "idle"
     return web.json_response({"ok": True})
 
+# ─── AI MEMORY API ────────────────────────────────────────────────────
+async def api_get_memory(request):
+    return web.json_response({"ok": True, "memory": state["ai_memory"]})
+
+async def api_edit_memory(request):
+    """Edit or delete facts for a person. body: { name, facts: [str] } or { name, delete: true }"""
+    data = await request.json()
+    name = data.get("name", "")
+    if not name:
+        return web.json_response({"ok": False, "error": "name required"}, status=400)
+    if data.get("delete"):
+        state["ai_memory"].pop(name, None)
+        log(f"Memory cleared for {name}")
+    elif "facts" in data:
+        state["ai_memory"][name] = [f for f in data["facts"] if f.strip()]
+        log(f"Memory updated for {name}")
+    return web.json_response({"ok": True, "memory": state["ai_memory"]})
+
+# ─── ANALYTICS API ────────────────────────────────────────────────────
+async def api_analytics(request):
+    analytics = state["analytics"]
+    response_times = state["response_times"]
+
+    # Top senders sorted by message count
+    top_senders = sorted(
+        [{"name": k, "count": v["count"], "last_seen": v.get("last_seen", "")}
+         for k, v in analytics.items()],
+        key=lambda x: x["count"], reverse=True
+    )[:20]
+
+    # Peak hours — return as list of {hour, count} sorted by count
+    total_hours = [0] * 24
+    for data in analytics.values():
+        for i, c in enumerate(data.get("hours", [0]*24)):
+            total_hours[i] += c
+    peak_hours = sorted(
+        [{"hour": i, "count": c} for i, c in enumerate(total_hours) if c > 0],
+        key=lambda x: x["count"], reverse=True
+    )[:8]
+
+    # Avg response time across all convos
+    all_times = [t for times in response_times.values() for t in times]
+    avg_response_time = round(sum(all_times) / len(all_times), 1) if all_times else None
+
+    return web.json_response({
+        "ok": True,
+        "top_senders": top_senders,
+        "peak_hours": peak_hours,
+        "avg_response_time": avg_response_time,
+        "total_tracked": sum(v["count"] for v in analytics.values()),
+    })
+
 async def api_update_persona(request):
     data = await request.json()
     if "persona" in data:
         state["ai_persona"] = data["persona"]
     if "my_name" in data and data["my_name"].strip():
         state["my_name"] = data["my_name"].strip()
-    log(f"AI persona updated via web")
+    log("AI persona updated via web")
     return web.json_response({"ok": True})
 
 async def api_toggle_ai(request):
@@ -743,28 +943,38 @@ async def api_set_context(request):
 async def api_summarise_chat(request):
     data = await request.json()
     chat_name = data.get("name", "")
+    state["results"] = []
+    state["task_status"] = "running"
     asyncio.create_task(do_summarise_single(chat_name))
-    return web.json_response({"ok": True, "message": f"Summarising {chat_name} — check Saved Messages!"})
+    return web.json_response({"ok": True, "message": f"Summarising {chat_name}..."})
 
 async def do_summarise_single(query):
-    async for dialog in client.iter_dialogs():
-        if query.lower() in (dialog.name or "").lower():
-            messages = []
-            async for msg in client.iter_messages(dialog.entity, limit=MESSAGES_PER_CHAT):
-                if msg.text:
-                    try:
-                        sender = getattr(await msg.get_sender(), "first_name", None) or dialog.name
-                    except:
-                        sender = "Someone"
-                    messages.append(f"{sender}: {msg.text}")
-            if not messages:
-                await client.send_message("me", f"📭 No messages in '{dialog.name}'.")
+    try:
+        async for dialog in client.iter_dialogs():
+            if query.lower() in (dialog.name or "").lower():
+                messages = []
+                async for msg in client.iter_messages(dialog.entity, limit=MESSAGES_PER_CHAT):
+                    if msg.text:
+                        try:
+                            sender = getattr(await msg.get_sender(), "first_name", None) or dialog.name
+                        except:
+                            sender = "Someone"
+                        messages.append(f"{sender}: {msg.text}")
+                if not messages:
+                    state["results"].append({"type": "empty", "content": f"No messages in '{dialog.name}'"})
+                    state["task_status"] = "done"
+                    return
+                messages.reverse()
+                summary = await summarise_chat(dialog.name, messages)
+                state["results"].append({"type": "summary", "name": dialog.name, "content": summary})
+                state["task_status"] = "done"
+                await client.send_message("me", f"📋 **{dialog.name}**\n\n{summary}")
                 return
-            messages.reverse()
-            summary = await summarise_chat(dialog.name, messages)
-            await client.send_message("me", f"📋 **{dialog.name}**\n\n{summary}")
-            return
-    await client.send_message("me", f"❌ No chat matching '{query}'")
+        state["results"].append({"type": "error", "content": f"No chat matching '{query}'"})
+        state["task_status"] = "done"
+    except Exception as e:
+        state["results"].append({"type": "error", "content": str(e)})
+        state["task_status"] = "done"
 
 # Serve frontend
 async def serve_index(request):
@@ -785,11 +995,15 @@ def make_app():
     app.router.add_post("/api/persona", api_update_persona)
     app.router.add_post("/api/chat-context", api_set_context)
     app.router.add_post("/api/clear-results", api_clear_results)
+    app.router.add_get("/api/memory", api_get_memory)
+    app.router.add_post("/api/memory", api_edit_memory)
+    app.router.add_get("/api/analytics", api_analytics)
     return app
+
 
 # ─── MAIN ────────────────────────────────────────────────────────────
 async def main():
-    log("Starting userbot...")
+    log("Starting TeleFlow AI...")
     await client.start()
     if not await client.is_user_authorized():
         log("❌ Session invalid!")
@@ -799,6 +1013,7 @@ async def main():
     log(f"✅ Logged in as {me.first_name} (@{me.username})")
     log(f"✅ Model: {OPENROUTER_MODEL}")
 
+    # Reset message counter + goodbye list daily
     async def midnight_reset():
         while True:
             await asyncio.sleep(86400)
